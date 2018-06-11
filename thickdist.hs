@@ -24,7 +24,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 import Prelude.Unicode
-import GHC.Generics (Generic)
 import Foreign.C.Types (CFloat)
 import qualified Foreign.C.Error as Foreign
 import System.Exit
@@ -63,6 +62,9 @@ newtype InputGainKnob
       = InputGainKnob Decibels
         deriving (Num, Fractional, Real, RealFrac, Eq, Ord)
 
+inputGainKnobPrecalc ∷ InputGainKnob → Coefficient
+inputGainKnobPrecalc (InputGainKnob x) = dbToCoefficient x
+
 instance Show    InputGainKnob where show (InputGainKnob x) = show x
 instance Default InputGainKnob where def      = InputGainKnob 0
 instance Step    InputGainKnob where step     = InputGainKnob 0.5
@@ -72,6 +74,9 @@ instance Bounded InputGainKnob where minBound = InputGainKnob (-20)
 newtype AttackKnob
       = AttackKnob Milliseconds
         deriving (Num, Fractional, Real, RealFrac, Eq, Ord)
+
+attackKnobPrecalc ∷ SampleRate → AttackKnob → NFrames
+attackKnobPrecalc sr (AttackKnob x) = msToSamples sr x
 
 instance Show    AttackKnob where show (AttackKnob x) = fracNShow 2 x
 instance Default AttackKnob where def      = AttackKnob 0.1
@@ -83,20 +88,23 @@ newtype ReleaseKnob
       = ReleaseKnob Milliseconds
         deriving (Num, Fractional, Real, RealFrac, Eq, Ord)
 
+releaseKnobPrecalc ∷ SampleRate → ReleaseKnob → NFrames
+releaseKnobPrecalc sr (ReleaseKnob x) = msToSamples sr x
+
 instance Show    ReleaseKnob where show (ReleaseKnob x) = fracNShow 2 x
 instance Default ReleaseKnob where def      = ReleaseKnob 0.1
 instance Step    ReleaseKnob where step     = ReleaseKnob 0.01
 instance Bounded ReleaseKnob where minBound = ReleaseKnob 0.01
                                    maxBound = ReleaseKnob 5
 
+-- Each knob have precalculated value in second part of tuple which is used in
+-- real-time critical jack process callback to avoid wasting time there.
 data Knobs
    = Knobs
-   { inputGainKnob ∷ InputGainKnob
-   , attackKnob    ∷ AttackKnob
-   , releaseKnob   ∷ ReleaseKnob
-   } deriving Generic
-
-instance Default Knobs
+   { inputGainKnob ∷ (InputGainKnob, Coefficient)
+   , attackKnob    ∷ (AttackKnob,    NFrames)
+   , releaseKnob   ∷ (ReleaseKnob,   NFrames)
+   }
 
 data Knob
    = InputGainKnob'
@@ -112,10 +120,16 @@ measureSfx ReleaseKnob'   = "ms"
 
 main ∷ IO ()
 main = do
-  knobsRef ← newIORef (def ∷ Knobs)
   selectedKnobRef ← newIORef (minBound ∷ Knob)
-  jackClientDeactivate ← initJACK knobsRef
-  ui knobsRef selectedKnobRef jackClientDeactivate
+  (jackClient, sr) ← preInitJACK
+
+  knobsRef ← newIORef Knobs { inputGainKnob = (def, inputGainKnobPrecalc def)
+                            , attackKnob    = (def, attackKnobPrecalc sr def)
+                            , releaseKnob   = (def, releaseKnobPrecalc sr def)
+                            }
+
+  jackClientDeactivate ← initJACK jackClient knobsRef
+  ui sr knobsRef selectedKnobRef jackClientDeactivate
 
 
 jackProcess
@@ -129,7 +143,7 @@ jackProcess knobsRef inPort outPort nframes _ = do
   inArr  ← getBufferArray inPort  nframes
   outArr ← getBufferArray outPort nframes
   knobs  ← readIORef knobsRef
-  let (InputGainKnob (dbToCoefficient → gainCo)) = inputGainKnob knobs
+  let (_, gainCo) = inputGainKnob knobs
 
   forM_ (nframesIndices nframes) $ \i →
     (* gainCo) <$> readArray inArr i >>= writeArray outArr i
@@ -137,15 +151,19 @@ jackProcess knobsRef inPort outPort nframes _ = do
   pure Foreign.eOK
 
 
--- Returns JACK client deactivator monad
-initJACK ∷ IORef Knobs → IO (IO ())
-initJACK knobsRef = do
+preInitJACK ∷ IO (Client, SampleRate)
+preInitJACK = do
   !jackClient ←
     runExceptionalT (newClientDefault clientName) >>=
       handleException (Proxy ∷ Proxy (Status ()))
         "Failed to initialize JACK client"
         Nothing
 
+  (jackClient,) <$> getSampleRate jackClient
+
+-- Returns JACK client deactivator monad
+initJACK ∷ Client → IORef Knobs → IO (IO ())
+initJACK jackClient knobsRef = do
   ((inPort ∷ Port JACK.Input), (outPort ∷ Port JACK.Output)) ←
     handleException (Proxy ∷ Proxy (PortRegister ()))
       "Failed to register JACK ports" Nothing =<< runExceptionalT
@@ -170,8 +188,8 @@ initJACK knobsRef = do
         (Just errnoExceptionReport)
 
 
-ui ∷ IORef Knobs → IORef Knob → IO () → IO ()
-ui knobsRef selectedKnobRef jackClientDeactivate = do
+ui ∷ SampleRate → IORef Knobs → IORef Knob → IO () → IO ()
+ui sr knobsRef selectedKnobRef jackClientDeactivate = do
   cfg ← standardIOConfig
   vty ← mkVty cfg
   render vty
@@ -220,12 +238,15 @@ ui knobsRef selectedKnobRef jackClientDeactivate = do
       where (kx : kxs) = knobs
             reducer acc x = acc `vertJoin` f x
 
-            f k@InputGainKnob' =
-              hslider (measureSfx k) (k ≡ selectedKnob) (inputGainKnob knobs')
-            f k@AttackKnob' =
-              hslider (measureSfx k) (k ≡ selectedKnob) (attackKnob knobs')
-            f k@ReleaseKnob' =
-              hslider (measureSfx k) (k ≡ selectedKnob) (releaseKnob knobs')
+            f k@InputGainKnob'
+              = hslider (measureSfx k) (k ≡ selectedKnob)
+              $ fst $ inputGainKnob knobs'
+            f k@AttackKnob'
+              = hslider (measureSfx k) (k ≡ selectedKnob)
+              $ fst $ attackKnob knobs'
+            f k@ReleaseKnob'
+              = hslider (measureSfx k) (k ≡ selectedKnob)
+              $ fst $ releaseKnob knobs'
 
     hslider ∷ (Bounded α, RealFrac α, Show α) ⇒ String → IsActive → α → Image
     hslider sfx isActive knob =
@@ -263,17 +284,20 @@ ui knobsRef selectedKnobRef jackClientDeactivate = do
       knobsRef `modifyIORef'` \x →
         case selectedKnob of
              InputGainKnob' →
-               x { inputGainKnob = inputGainKnob x `operation` step }
+               let v = fst (inputGainKnob x) `operation` step
+                in x { inputGainKnob = (v, inputGainKnobPrecalc v) }
              AttackKnob' →
-               x { attackKnob = attackKnob x `operation` step }
+               let v = fst (attackKnob x) `operation` step
+                in x { attackKnob = (v, attackKnobPrecalc sr v) }
              ReleaseKnob' →
-               x { releaseKnob = releaseKnob x `operation` step }
+               let v = fst (releaseKnob x) `operation` step
+                in x { releaseKnob = (v, releaseKnobPrecalc sr v) }
 
       where operation = if increasing then boundedPlus else boundedMinus
 
 
-samplesInMs ∷ SampleRate → Milliseconds → NFrames
-samplesInMs sr ms = NFrames $ round $ fromIntegral sr * ms / 1000
+msToSamples ∷ SampleRate → Milliseconds → NFrames
+msToSamples sr ms = NFrames $ round $ fromIntegral sr * ms / 1000
 
 dbToCoefficient ∷ Decibels → Coefficient
 dbToCoefficient dB | dB > -90.0 = 10 ** (dB * 0.05)
