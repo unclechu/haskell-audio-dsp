@@ -137,17 +137,18 @@ main = do
 
 jackProcess
   ∷ IORef Knobs
-  → IORef Sample
   → Port JACK.Input
   → Port JACK.Output
   → NFrames
   → Ptr ()
   → IO Foreign.Errno
-jackProcess knobsRef bufRef inPort outPort nframes@(NFrames _nframes) _ = do
+jackProcess knobsRef inPort outPort nframes@(NFrames _nframes) _ = do
   inArr  ← getBufferArray inPort  nframes
   outArr ← getBufferArray outPort nframes
   knobs  ← readIORef knobsRef
-  buf    ← readIORef bufRef
+
+  !buf   ← -- We able to read last sample from previous buffer output array.
+           readArray outArr lastNFrame
 
   let (_, inputGainCo)      = inputGainKnob  knobs
       (_, (co, coOpposite)) = thicknessKnob  knobs
@@ -161,16 +162,12 @@ jackProcess knobsRef bufRef inPort outPort nframes@(NFrames _nframes) _ = do
         where f x = (lastSample × coOpposite) + (x × co)
 
   forM_ (nframesIndices nframes) $ \i@(NFrames _i) →
-    let lastSampleM = if _i ≡ minBound
-                         then pure buf
-                         else readArray inArr (NFrames $ pred _i)
+    let lastSample = if _i ≡ minBound
+                        then pure buf
+                        else readArray outArr (NFrames $ pred _i)
+        currentSample = readArray inArr i
+     in process <$> lastSample <*> currentSample >>= writeArray outArr i
 
-        currentSampleM = readArray inArr i
-
-     in process <$> lastSampleM <*> currentSampleM
-                >>= writeArray outArr i
-
-  writeIORef bufRef =<< readArray outArr lastNFrame
   pure Foreign.eOK
 
   where hardLimiter = min 1 ∘ max (-1)
@@ -195,8 +192,7 @@ initJACK jackClient knobsRef = do
       "Failed to register JACK ports" Nothing =<< runExceptionalT
         ((,) <$> newPort jackClient "in" <*> newPort jackClient "out")
 
-  bufRef ← newIORef (0 ∷ Sample)
-  processPtr ← makeProcess $ jackProcess knobsRef bufRef inPort outPort
+  processPtr ← makeProcess $ jackProcess knobsRef inPort outPort
 
   runExceptionalT (setProcess jackClient processPtr nullPtr) >>=
     handleException (Proxy ∷ Proxy (Errno ()))
