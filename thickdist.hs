@@ -149,9 +149,13 @@ jackProcess knobsRef inPort outPort nframes _ = do
   let (_, gainCo) = inputGainKnob knobs
 
   forM_ (nframesIndices nframes) $ \i →
-    (* gainCo) <$> readArray inArr i >>= writeArray outArr i
+    hardLimiter ∘ (* gainCo)
+      <$> readArray inArr i >>= writeArray outArr i
 
   pure Foreign.eOK
+
+  where hardLimiter ∷ Sample → Sample
+        hardLimiter = min 1 ∘ max (-1)
 
 
 preInitJACK ∷ IO (Client, SampleRate)
