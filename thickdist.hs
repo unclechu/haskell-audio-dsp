@@ -11,6 +11,8 @@
  -}
 -- | “Thick Distortion” JACK standalone application.
 -- WARNING! Work in progress (isn't complete yet).
+-- Author: Viacheslav Lotsmanov
+-- License: GPLv3 (see LICENSE file)
 {-# OPTIONS_GHC -threaded #-}
 {-# LANGUAGE UnicodeSyntax #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
