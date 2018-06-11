@@ -65,7 +65,8 @@ newtype InputGainKnob
 inputGainKnobPrecalc ∷ InputGainKnob → Coefficient
 inputGainKnobPrecalc (InputGainKnob x) = dbToCoefficient x
 
-instance Show    InputGainKnob where show (InputGainKnob x) = show x
+instance Show    InputGainKnob where show (InputGainKnob x) = "Input Gain: "
+                                                            ◇ show x
 instance Default InputGainKnob where def      = InputGainKnob 0
 instance Step    InputGainKnob where step     = InputGainKnob 0.5
 instance Bounded InputGainKnob where minBound = InputGainKnob (-20)
@@ -78,7 +79,8 @@ newtype AttackKnob
 attackKnobPrecalc ∷ SampleRate → AttackKnob → NFrames
 attackKnobPrecalc sr (AttackKnob x) = msToSamples sr x
 
-instance Show    AttackKnob where show (AttackKnob x) = fracNShow 2 x
+instance Show    AttackKnob where show (AttackKnob x) = "Attack: "
+                                                      ◇ fracNShow 2 x
 instance Default AttackKnob where def      = AttackKnob 0.1
 instance Step    AttackKnob where step     = AttackKnob 0.01
 instance Bounded AttackKnob where minBound = AttackKnob 0.01
@@ -91,7 +93,8 @@ newtype ReleaseKnob
 releaseKnobPrecalc ∷ SampleRate → ReleaseKnob → NFrames
 releaseKnobPrecalc sr (ReleaseKnob x) = msToSamples sr x
 
-instance Show    ReleaseKnob where show (ReleaseKnob x) = fracNShow 2 x
+instance Show    ReleaseKnob where show (ReleaseKnob x) = "Release: "
+                                                        ◇ fracNShow 2 x
 instance Default ReleaseKnob where def      = ReleaseKnob 0.1
 instance Step    ReleaseKnob where step     = ReleaseKnob 0.01
 instance Bounded ReleaseKnob where minBound = ReleaseKnob 0.01
