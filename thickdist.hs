@@ -10,7 +10,6 @@
  --package=vty
  -}
 -- | “Thick Distortion” JACK standalone application.
--- WARNING! Work in progress (isn't complete yet).
 -- Author: Viacheslav Lotsmanov
 -- License: GPLv3 (see LICENSE file)
 {-# OPTIONS_GHC -threaded #-}
@@ -23,6 +22,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE FlexibleContexts #-}
 import Prelude.Unicode
 import Foreign.C.Types (CFloat)
 import qualified Foreign.C.Error as Foreign
@@ -70,55 +70,55 @@ instance Show    InputGainKnob where show (InputGainKnob x) = "Input Gain: "
 instance Default InputGainKnob where def      = InputGainKnob 0
 instance Step    InputGainKnob where step     = InputGainKnob 0.5
 instance Bounded InputGainKnob where minBound = InputGainKnob (-20)
-                                     maxBound = InputGainKnob 40
+                                     maxBound = InputGainKnob 80
 
-newtype AttackKnob
-      = AttackKnob Milliseconds
+newtype OutputGainKnob
+      = OutputGainKnob Decibels
         deriving (Num, Fractional, Real, RealFrac, Eq, Ord)
 
-attackKnobPrecalc ∷ SampleRate → AttackKnob → NFrames
-attackKnobPrecalc sr (AttackKnob x) = msToSamples sr x
+outputGainKnobPrecalc ∷ OutputGainKnob → Coefficient
+outputGainKnobPrecalc (OutputGainKnob x) = dbToCoefficient x
 
-instance Show    AttackKnob where show (AttackKnob x) = "Attack: "
-                                                      ◇ fracNShow 2 x
-instance Default AttackKnob where def      = AttackKnob 0.1
-instance Step    AttackKnob where step     = AttackKnob 0.01
-instance Bounded AttackKnob where minBound = AttackKnob 0.01
-                                  maxBound = AttackKnob 5
+instance Show    OutputGainKnob where show (OutputGainKnob x) = "Output Gain: "
+                                                              ◇ show x
+instance Default OutputGainKnob where def      = OutputGainKnob 0
+instance Step    OutputGainKnob where step     = OutputGainKnob 0.5
+instance Bounded OutputGainKnob where minBound = OutputGainKnob (-90)
+                                      maxBound = OutputGainKnob 12
 
-newtype ReleaseKnob
-      = ReleaseKnob Milliseconds
+newtype ThicknessKnob
+      = ThicknessKnob F
         deriving (Num, Fractional, Real, RealFrac, Eq, Ord)
 
-releaseKnobPrecalc ∷ SampleRate → ReleaseKnob → NFrames
-releaseKnobPrecalc sr (ReleaseKnob x) = msToSamples sr x
+thicknessKnobPrecalc ∷ ThicknessKnob → (F, F)
+thicknessKnobPrecalc (ThicknessKnob x) = (1 - x, x)
 
-instance Show    ReleaseKnob where show (ReleaseKnob x) = "Release: "
-                                                        ◇ fracNShow 2 x
-instance Default ReleaseKnob where def      = ReleaseKnob 0.1
-instance Step    ReleaseKnob where step     = ReleaseKnob 0.01
-instance Bounded ReleaseKnob where minBound = ReleaseKnob 0.01
-                                   maxBound = ReleaseKnob 5
+instance Show    ThicknessKnob where show (ThicknessKnob x) = "Thickness: "
+                                                            ◇ fracNShow 2 x
+instance Default ThicknessKnob where def      = ThicknessKnob 0.80
+instance Step    ThicknessKnob where step     = ThicknessKnob 0.01
+instance Bounded ThicknessKnob where minBound = ThicknessKnob 0.01
+                                     maxBound = ThicknessKnob 1
 
 -- Each knob have precalculated value in second part of tuple which is used in
 -- real-time critical jack process callback to avoid wasting time there.
 data Knobs
    = Knobs
-   { inputGainKnob ∷ (InputGainKnob, Coefficient)
-   , attackKnob    ∷ (AttackKnob,    NFrames)
-   , releaseKnob   ∷ (ReleaseKnob,   NFrames)
+   { inputGainKnob  ∷ (InputGainKnob,  Coefficient)
+   , thicknessKnob  ∷ (ThicknessKnob,  (F, F))
+   , outputGainKnob ∷ (OutputGainKnob, Coefficient)
    }
 
 data Knob
    = InputGainKnob'
-   | AttackKnob'
-   | ReleaseKnob'
+   | ThicknessKnob'
+   | OutputGainKnob'
      deriving (Eq, Enum, Bounded, Ord, Show)
 
 measureSfx ∷ Knob → String
-measureSfx InputGainKnob' = "dB"
-measureSfx AttackKnob'    = "ms"
-measureSfx ReleaseKnob'   = "ms"
+measureSfx InputGainKnob'  = "dB"
+measureSfx ThicknessKnob'  = ""
+measureSfx OutputGainKnob' = "dB"
 
 
 main ∷ IO ()
@@ -126,9 +126,9 @@ main = do
   selectedKnobRef ← newIORef (minBound ∷ Knob)
   (jackClient, sr) ← preInitJACK
 
-  knobsRef ← newIORef Knobs { inputGainKnob = (def, inputGainKnobPrecalc def)
-                            , attackKnob    = (def, attackKnobPrecalc sr def)
-                            , releaseKnob   = (def, releaseKnobPrecalc sr def)
+  knobsRef ← newIORef Knobs { inputGainKnob  = (def, inputGainKnobPrecalc  def)
+                            , thicknessKnob  = (def, thicknessKnobPrecalc  def)
+                            , outputGainKnob = (def, outputGainKnobPrecalc def)
                             }
 
   jackClientDeactivate ← initJACK jackClient knobsRef
@@ -137,25 +137,44 @@ main = do
 
 jackProcess
   ∷ IORef Knobs
+  → IORef Sample
   → Port JACK.Input
   → Port JACK.Output
   → NFrames
   → Ptr ()
   → IO Foreign.Errno
-jackProcess knobsRef inPort outPort nframes _ = do
+jackProcess knobsRef bufRef inPort outPort nframes@(NFrames _nframes) _ = do
   inArr  ← getBufferArray inPort  nframes
   outArr ← getBufferArray outPort nframes
   knobs  ← readIORef knobsRef
-  let (_, gainCo) = inputGainKnob knobs
+  buf    ← readIORef bufRef
 
-  forM_ (nframesIndices nframes) $ \i →
-    hardLimiter ∘ (* gainCo)
-      <$> readArray inArr i >>= writeArray outArr i
+  let (_, inputGainCo)      = inputGainKnob  knobs
+      (_, (co, coOpposite)) = thicknessKnob  knobs
+      (_, outputGainCo)     = outputGainKnob knobs
 
+      process lastSample = (× outputGainCo)
+                         ∘ f
+                         ∘ hardLimiter
+                         ∘ (× inputGainCo)
+
+        where f x = (lastSample × coOpposite) + (x × co)
+
+  forM_ (nframesIndices nframes) $ \i@(NFrames _i) →
+    let lastSampleM = if _i ≡ minBound
+                         then pure buf
+                         else readArray inArr (NFrames $ pred _i)
+
+        currentSampleM = readArray inArr i
+
+     in process <$> lastSampleM <*> currentSampleM
+                >>= writeArray outArr i
+
+  writeIORef bufRef =<< readArray outArr lastNFrame
   pure Foreign.eOK
 
-  where hardLimiter ∷ Sample → Sample
-        hardLimiter = min 1 ∘ max (-1)
+  where hardLimiter = min 1 ∘ max (-1)
+        lastNFrame  = NFrames $ pred _nframes
 
 
 preInitJACK ∷ IO (Client, SampleRate)
@@ -176,7 +195,8 @@ initJACK jackClient knobsRef = do
       "Failed to register JACK ports" Nothing =<< runExceptionalT
         ((,) <$> newPort jackClient "in" <*> newPort jackClient "out")
 
-  processPtr ← makeProcess $ jackProcess knobsRef inPort outPort
+  bufRef ← newIORef (0 ∷ Sample)
+  processPtr ← makeProcess $ jackProcess knobsRef bufRef inPort outPort
 
   runExceptionalT (setProcess jackClient processPtr nullPtr) >>=
     handleException (Proxy ∷ Proxy (Errno ()))
@@ -248,12 +268,12 @@ ui sr knobsRef selectedKnobRef jackClientDeactivate = do
             f k@InputGainKnob'
               = hslider (measureSfx k) (k ≡ selectedKnob)
               $ fst $ inputGainKnob knobs'
-            f k@AttackKnob'
+            f k@ThicknessKnob'
               = hslider (measureSfx k) (k ≡ selectedKnob)
-              $ fst $ attackKnob knobs'
-            f k@ReleaseKnob'
+              $ fst $ thicknessKnob knobs'
+            f k@OutputGainKnob'
               = hslider (measureSfx k) (k ≡ selectedKnob)
-              $ fst $ releaseKnob knobs'
+              $ fst $ outputGainKnob knobs'
 
     hslider ∷ (Bounded α, RealFrac α, Show α) ⇒ String → IsActive → α → Image
     hslider sfx isActive knob =
@@ -293,21 +313,21 @@ ui sr knobsRef selectedKnobRef jackClientDeactivate = do
              InputGainKnob' →
                let v = fst (inputGainKnob x) `operation` step
                 in x { inputGainKnob = (v, inputGainKnobPrecalc v) }
-             AttackKnob' →
-               let v = fst (attackKnob x) `operation` step
-                in x { attackKnob = (v, attackKnobPrecalc sr v) }
-             ReleaseKnob' →
-               let v = fst (releaseKnob x) `operation` step
-                in x { releaseKnob = (v, releaseKnobPrecalc sr v) }
+             ThicknessKnob' →
+               let v = fst (thicknessKnob x) `operation` step
+                in x { thicknessKnob = (v, thicknessKnobPrecalc v) }
+             OutputGainKnob' →
+               let v = fst (outputGainKnob x) `operation` step
+                in x { outputGainKnob = (v, outputGainKnobPrecalc v) }
 
       where operation = if increasing then boundedPlus else boundedMinus
 
 
-msToSamples ∷ SampleRate → Milliseconds → NFrames
-msToSamples sr ms = NFrames $ round $ fromIntegral sr * ms / 1000
+-- msToSamples ∷ SampleRate → Milliseconds → NFrames
+-- msToSamples sr ms = NFrames $ round $ fromIntegral sr × ms ÷ 1000
 
 dbToCoefficient ∷ Decibels → Coefficient
-dbToCoefficient dB | dB > -90.0 = 10 ** (dB * 0.05)
+dbToCoefficient dB | dB > -90.0 = 10 □ (dB × 0.05)
                    | otherwise  = 0
 
 safeSucc, safePred ∷ (Enum α, Bounded α, Ord α) ⇒ α → Maybe α
@@ -321,7 +341,7 @@ boundedMinus a b = let x = a - b in if x ≤ minBound then minBound else x
 -- Get value from a..b range to c..d range.
 -- For example: `rangeShift (10, 20) (100, 200) 15 = 150`
 rangeShift ∷ (Num α, Fractional α) ⇒ (α, α) → (α, α) → α → α
-rangeShift (a, b) (c, d) x = c + ((x - a) / (b - a)) * (d - c)
+rangeShift (a, b) (c, d) x = c + ((x - a) ÷ (b - a)) × (d - c)
 
 fracNShow ∷ (RealFrac α, Floating α, Show α) ⇒ Int → α → String
 fracNShow n x = if length remainder > n
@@ -329,7 +349,7 @@ fracNShow n x = if length remainder > n
                    else show a ◇ "." ◇ remainderWithZeros
 
   where (a, b) = properFraction x
-        remainder = show $ round $ b * (10 ** fromIntegral n)
+        remainder = show $ round $ b × (10 □ fromIntegral n)
         needZeros = n - length remainder
         remainderWithZeros = replicate needZeros '0' ◇ remainder
 
@@ -349,4 +369,6 @@ errnoExceptionReport m (Errno (Foreign.Errno x)) = m ◇ ": Errno " ◇ show x
 errnoExceptionReport m _ = m
 
 clientName = "ThickDist"; clientName ∷ String
-(◇) = (<>); infixr 6 ◇; (◇) ∷ Monoid α ⇒ α → α → α; {-# INLINE (◇) #-}
+(◇) = (<>); infixr 6 ◇; (◇) ∷ Monoid α ⇒ α → α → α;   {-# INLINE (◇) #-}
+(×) = (*);  infixl 7 ×; (×) ∷ Num α ⇒ α → α → α;      {-# INLINE (×) #-}
+(□) = (**); infixr 8 □; (□) ∷ Floating α ⇒ α → α → α; {-# INLINE (□) #-}
