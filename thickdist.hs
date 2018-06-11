@@ -114,37 +114,7 @@ main ∷ IO ()
 main = do
   knobsRef ← newIORef (def ∷ Knobs)
   selectedKnobRef ← newIORef (minBound ∷ Knob)
-
-  (jackClientDeactivate ∷ IO ()) ← do
-    !jackClient ←
-      runExceptionalT (newClientDefault clientName) >>=
-        handleException (Proxy ∷ Proxy (Status ()))
-          "Failed to initialize JACK client"
-          Nothing
-
-    ((inPort ∷ Port JACK.Input), (outPort ∷ Port JACK.Output)) ←
-      handleException (Proxy ∷ Proxy (PortRegister ()))
-        "Failed to register JACK ports" Nothing =<< runExceptionalT
-          ((,) <$> newPort jackClient "in" <*> newPort jackClient "out")
-
-    processPtr ← makeProcess $ jackProcess knobsRef inPort outPort
-
-    runExceptionalT (setProcess jackClient processPtr nullPtr) >>=
-      handleException (Proxy ∷ Proxy (Errno ()))
-        "Failed to set JACK process callback"
-        (Just errnoExceptionReport)
-
-    runExceptionalT (activate jackClient) >>=
-      handleException (Proxy ∷ Proxy (Errno ()))
-        "Failed to activate JACK client"
-        (Just errnoExceptionReport)
-
-    pure $
-      runExceptionalT (deactivate jackClient) >>=
-        handleException (Proxy ∷ Proxy (Errno ()))
-          "Failed to deactivate JACK client"
-          (Just errnoExceptionReport)
-
+  jackClientDeactivate ← initJACK knobsRef
   ui knobsRef selectedKnobRef jackClientDeactivate
 
 
@@ -165,6 +135,39 @@ jackProcess knobsRef inPort outPort nframes _ = do
     (* gainCo) <$> readArray inArr i >>= writeArray outArr i
 
   pure Foreign.eOK
+
+
+-- Returns JACK client deactivator monad
+initJACK ∷ IORef Knobs → IO (IO ())
+initJACK knobsRef = do
+  !jackClient ←
+    runExceptionalT (newClientDefault clientName) >>=
+      handleException (Proxy ∷ Proxy (Status ()))
+        "Failed to initialize JACK client"
+        Nothing
+
+  ((inPort ∷ Port JACK.Input), (outPort ∷ Port JACK.Output)) ←
+    handleException (Proxy ∷ Proxy (PortRegister ()))
+      "Failed to register JACK ports" Nothing =<< runExceptionalT
+        ((,) <$> newPort jackClient "in" <*> newPort jackClient "out")
+
+  processPtr ← makeProcess $ jackProcess knobsRef inPort outPort
+
+  runExceptionalT (setProcess jackClient processPtr nullPtr) >>=
+    handleException (Proxy ∷ Proxy (Errno ()))
+      "Failed to set JACK process callback"
+      (Just errnoExceptionReport)
+
+  runExceptionalT (activate jackClient) >>=
+    handleException (Proxy ∷ Proxy (Errno ()))
+      "Failed to activate JACK client"
+      (Just errnoExceptionReport)
+
+  pure $
+    runExceptionalT (deactivate jackClient) >>=
+      handleException (Proxy ∷ Proxy (Errno ()))
+        "Failed to deactivate JACK client"
+        (Just errnoExceptionReport)
 
 
 ui ∷ IORef Knobs → IORef Knob → IO () → IO ()
