@@ -24,6 +24,9 @@ dependencies:
 - primitive
 - vty
 
+ghc-options:
+  - -O2
+
 library:
   source-dirs: src
 
