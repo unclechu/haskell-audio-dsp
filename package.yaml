@@ -1,0 +1,50 @@
+name:                audio-dsp
+version:             0.0.0.0
+github:              "unclechu/haskell-audio-dsp"
+license:             GPL-3
+author:              "Viacheslav Lotsmanov"
+maintainer:          "lotsmanov89@gmail.com"
+copyright:           "2018 Viacheslav Lotsmanov"
+category:            Audio
+synopsis:            Short description of your package
+
+description:
+  Please see the README on GitHub at <https://github.com/unclechu/haskell-audio-dsp#readme>
+
+extra-source-files:
+- README.md
+
+dependencies:
+- array
+- base >= 4.7 && < 5
+- base-unicode-symbols
+- data-default
+- explicit-exception
+- jack
+- primitive
+- vty
+
+library:
+  source-dirs: src
+
+executables:
+  thick-distortion.jack:
+    main:                Main.hs
+    source-dirs:         ThickDistortion
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - audio-dsp
+
+tests:
+  audio-dsp-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - audio-dsp

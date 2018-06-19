@@ -1,18 +1,7 @@
-#!/usr/bin/env stack
-{- stack script
- --resolver=lts-11.13
- --package=base-unicode-symbols
- --package=data-default
- --package=array
- --package=explicit-exception
- --package=primitive
- --package=jack
- --package=vty
- -}
 -- | “Thick Distortion” JACK standalone application.
 -- Author: Viacheslav Lotsmanov
 -- License: GPLv3 (see LICENSE file)
-{-# OPTIONS_GHC -threaded #-}
+
 {-# LANGUAGE UnicodeSyntax #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE DeriveGeneric #-}
@@ -23,6 +12,9 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE FlexibleContexts #-}
+
+module Main (main) where
+
 import Prelude.Unicode
 import Foreign.C.Types (CFloat)
 import qualified Foreign.C.Error as Foreign
